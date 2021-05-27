@@ -13,7 +13,7 @@ app = Flask(__name__)
 secret_key = app.secret_key = os.urandom(16)
 domen_name = 'http://127.0.0.1:5000/'
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///123proj.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///lib.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -22,34 +22,39 @@ class Users(db.Model):
     usersid = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.Text, nullable=False, unique=True)
     password = db.Column(db.BLOB, nullable=False)  # LargeBinary
-    salt = db.Column(db.Integer, nullable=False)
 
     def __repr__(self):
         return f'<Users {self.id}>'
 
 
 class Link(db.Model):
-    link_id = db.Column(db.Integer, primary_key=True)
-    long_link = db.Column(db.Text, nullable=False)
-    short_link = db.Column(db.Text, nullable=False, unique=True)
+    shortlinkid = db.Column(db.Integer, primary_key=True)
+    longlinkid = db.Column(db.Integer, db.ForeignKey('Long_link.longlinkid'), nullable=False)
     users_id = db.Column(db.Integer, db.ForeignKey('users.usersid'), nullable=False)
+    short_link = db.Column(db.Text, nullable=False)
     count_redirect = db.Column(db.Integer, nullable=True)
-    link_status = db.Column(db.Text, nullable=True)
+    link_status = db.Column(db.Integer, nullable=True)
 
     def __repr__(self):
         return f'<Link {self.id}>'
 
 
-class Readble_link(db.Model):
+class Long_link(db.Model):
+    longlinkid = db.Column(db.Integer, primary_key=True)
+    long_link = db.Column(db.Text, nullable=False)
 
-    link_id = db.Column(db.Integer, nullable=False, unique=True, primary_key=True)
+    def __repr__(self):
+        return f'<Long_link {self.id}>'
+
+
+class Readble_link(db.Model):
+    readble_link_id = db.Column(db.Integer, nullable=False, unique=True, primary_key=True)
+    link_id = db.Column(db.Integer, db.ForeignKey('users.linkid'), nullable=False, unique=True)
     link_name = db.Column(db.Text, nullable=False, unique=True)
 
     def __repr__(self):
         return '<Readble_link %r>' % self.id
 
-link_id=input('id')
-link_name=input('name')
 
 
 
@@ -102,3 +107,4 @@ def create_article():
 
 if __name__=="__main__":
     app.run(debug=False)
+

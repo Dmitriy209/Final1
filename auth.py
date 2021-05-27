@@ -1,20 +1,56 @@
-from flask import Flask, request, jsonify, session, redirect, url_for
+from flask import Flask, request, jsonify, session, redirect, make_response
+from flask_sqlalchemy import SQLAlchemy
 import jwt
 from functools import wraps
 import sqlite3
 import os
-import hashlib
-import random
+from random import randint, choice
+import bcrypt
+from hashlib import md5
 
 
 app = Flask(__name__)
 secret_key = app.secret_key = os.urandom(16)
-domen_name = 'http://127.0.0.1:5000/'
-# Декоратор, который проверяет лишь тот факт, что токен валидный. Тобишь создан реальным пользователем(Возможно будет использоватся в дальнейшем для просмотра страницы с собственными короткими ссылками)
+DATABASE = 'lib.db'
+
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///lib.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+
+class Users(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.Text, nullable=False, unique=True)
+    password = db.Column(db.BLOB, nullable=False)  # LargeBinary
+
+    def __repr__(self):
+        return f'<Users {self.id}>'
+
+
+class longlink(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    long_link = db.Column(db.Text, nullable=False)
+
+    def __repr__(self):
+        return f'<longlink {self.id}>'
+
+
+class Link(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    longlink_id = db.Column(db.Integer, db.ForeignKey('longlink.id'), nullable=False)
+    users_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    short_link = db.Column(db.Text, nullable=False)
+    count_redirect = db.Column(db.Integer, nullable=True)
+    link_status = db.Column(db.Integer, nullable=True)
+
+    def __repr__(self):
+        return f'<Link {self.id}>'
+
+
 def check_token(func):
     @wraps(func)
     def wrapped(*args, **kwargs):
-        token = request.args.get('token')
+        token = request.cookies.get('token')
         if not token:
             return jsonify({"message": "Missing token"}), 403
         try:
@@ -24,231 +60,303 @@ def check_token(func):
         return func(*args, **kwargs)
     return wrapped
 
-# Переделал аутентификацию. Теперь регистрация и авторизация лишь в одном методе /login
-@app.route("/login", methods=['GET', 'POST'])
+@app.route("/login", methods=['GET'])
 def login():
     if request.method == 'GET':
-        username = request.args.get('username')
-        passwd = request.args.get('password')
-        headers = {
-            "typ": "JWT",
-            "alg": "HS256"
-        }
-        payloads = {
-            "username": username
-        }
-        try:
-            conn = sqlite3.connect('proj.db')
-            db = conn.cursor()
-            data = db.execute("SELECT password, salt FROM users WHERE username = ?", (username,)).fetchall()
-            hash_passwd = hashlib.pbkdf2_hmac('sha256', passwd.encode('UTF-8'), data[0][1], 100000)  
-            if data[0][0] is not None and data[0][0] == hash_passwd:
-                session[f'{username}'] = True
-                token = jwt.encode(payload=payloads, key= secret_key, algorithm="HS256", headers=headers)
-            else:
-                return jsonify({"message": "Неверное имя пользователя или пароль"})
-        except:
-            return jsonify({"message": f"Пользователя с именем {username} не существует"})
-        finally:
-            conn.close()
-        return jsonify({'message': token})
-    if request.method == 'POST':
-        username = request.args.get('username')
-        passwd = request.args.get('password')
-        salt = os.urandom(32)
-        hash_passwd = hashlib.pbkdf2_hmac('sha256', passwd.encode('UTF-8'), salt, 100000)
-        headers = {
-            "typ": "JWT",
-            "alg": "HS256"
-        }
-        payloads = {
-            "username": username
-        }
-        token = jwt.encode(payload=payloads, key=secret_key, algorithm="HS256", headers=headers)
-        try:
-            con = sqlite3.connect('proj.db')
-            db = con.cursor()
-            db.execute("INSERT INTO users(username, password, salt) VALUES(?, ?, ?)", (username, hash_passwd, salt))
-            con.commit()
-        except:
-            return "Пользователь с таким именем уже зарегистрирован. Попробуйте использовать другое имя."
-        finally:
-            con.close()
-        return jsonify({"token": token})
-
-
-# Авторизация пользователя. По факту возвращает лишь то, что видно только авторизированному пользователю. Понадобится для просмотра коротких ссылок.
-@app.route("/auth", methods=['GET', 'POST', 'DELETE', 'PATCH'])
-@check_token
-def auth():
-    if request.method == 'POST':
-        short_link = ''
-        
-        long_link = request.args.get('long_link')
-        readble_link = request.args.get('readble_link')
-        token = request.args.get('token')
-        link_status = request.args.get('link_status')
-        marker = True
-        while marker == True:
+        data = request.get_json()
+        username = data['username']
+        passwd = data['password']
+        if username != '' and passwd != '':
+            headers = {
+                "typ": "JWT",
+                "alg": "HS256"
+            }
+            payloads = {
+                "username": username
+            }
             try:
-                conn = sqlite3.connect('proj.db')
-                db = conn.cursor()
-                short_link = make_short_link()
-                link = db.execute('SELECT short_link FROM link WHERE short_link = ?', (short_link,)).fetchone()
-                if link is None:
-                    marker = False
+
+                pswd = Users.query.filter_by(username=username).first()
+                password = pswd.password
+
+                hash_passwd = bcrypt.checkpw(passwd.encode(), password)
+                if passwd is not None and hash_passwd is True:
+                    token = jwt.encode(payload=payloads, key=secret_key, algorithm="HS256", headers=headers)
+                    res = make_response(jsonify({"token": token}))
+                    res.set_cookie(key='token', value=token)
+                else:
+                    return jsonify({"message": "Неверное имя пользователя или пароль"}), 403
             except:
-                return jsonify({'message': 'Что-то пошло не так 1 !'})
-            finally:
-                conn.close()
+                return jsonify({"message": f"Пользователя с именем {username} не существует"}), 403
+        else:
+            return jsonify({"message": "Введите имя пользователя и пароль"}), 403
+    return res
+
+@app.route("/register", methods=['POST'])
+def register():
+    if request.method == 'POST':
+        data = request.get_json()
+        username = data['username']
+        passwd = data['password']
+        if username != '' and passwd != '':
+            hash_passwd = bcrypt.hashpw(passwd.encode(), bcrypt.gensalt())
+            headers = {
+                "typ": "JWT",
+                "alg": "HS256"
+            }
+            payloads = {
+                "username": username
+            }
+            token = jwt.encode(payload=payloads, key=secret_key, algorithm="HS256", headers=headers)
+            res = make_response(jsonify({"token": token}))
+            res.set_cookie(key='token', value=token)
+            try:
+                users = Users(username=username, password=hash_passwd)
+                db.session.add(users)
+                db.session.commit()
+            except:
+                return "Пользователь с таким именем уже зарегистрирован. Попробуйте использовать другое имя.",  403
+
+        else:
+            return jsonify({"message": "Введите имя пользователя и пароль"}), 403
+        return res
+
+
+@app.route("/make_link", methods=['POST'])
+@check_token
+def make_link():
+    if request.method == 'POST':
+        data = request.get_json()
+        long_link = data['long_link']
+        short_link = data['short_link']
+        token = request.cookies.get('token')
+        link_status = data['link_status']
+        if short_link == "":
+            short_link = make_short_link()
         try:
-            conn = sqlite3.connect('proj.db')
-            db = conn.cursor()
+
             username = jwt.decode(token, secret_key, 'HS256')
-            user_id = db.execute('SELECT user_id FROM users WHERE username = ?', (username['username'],)).fetchone()[0]
-            print(user_id)
-            double_long_link = db.execute('SELECT long_link FROM link WHERE long_link = ? AND user_id = ? AND link_status = ?', (long_link, user_id, link_status)).fetchone()
-            print(double_long_link)
+            username = username['username']
+            usr = Users.query.filter_by(username=username).first()
+            user_id = usr.id
+            # dbllink = longlink.query.filter_by(long_link=long_link).first()
+            # dbllinkid = dbllink.id
+            # usrdbllnk = Link.query.filter_by(users_id=user_id, link_status=link_status, longlink_id=dbllinkid).first()
+            # double_long_link = usrdbllnk.long_link
+            # print(double_long_link)
+
+            #user_id = db.execute('SELECT user_id FROM users WHERE username = ?', (username['username'],)).fetchone()[0]
+            #double_long_link = db.execute('SELECT long_link FROM link WHERE long_link = ? AND user_id = ? AND link_status = ?', (long_link, user_id, link_status)).fetchone()
+            double_long_link = None
+
+
             if double_long_link is not None:
                 message = jsonify({"message": "Данная ссылка уже была сокращена вами ранее. Вы можете редактировать ее в личном кабинете"})
             else:
-                db.execute('INSERT INTO link(long_link, short_link, user_id, link_status) VALUES(?, ?, ?, ?, ?)', (long_link, domen_name+short_link, user_id, link_status))
-                conn.commit()
-                link_id = db.execute('SELECT link_id FROM link WHERE long_link = ? AND user_id = ? AND link_status = ?', (long_link, user_id, link_status)).fetchone()[0]
-                db.execute('INSERT INTO readble_link(link_id, link_name) VALUES(?, ?);', (link_id, domen_name+readble_link))
-                conn.commit()
-                message = jsonify({long_link: domen_name+short_link})
+                #  Проверка на двойную ссылку
+                lnglnk = longlink.query.filter_by(long_link=long_link).first()
+                longlnk = lnglnk.long_link
+                if long_link != longlnk:
+                    lnglnk = longlink(long_link=long_link)
+                    db.session.add(lnglnk)
+                    db.session.commit()
+                lnglnk = longlink.query.filter_by(long_link=long_link).first()
+                lnglnkid = lnglnk.id
+                link = Link(short_link=short_link, users_id=user_id, link_status=link_status, longlink_id=lnglnkid)
+                db.session.add(link)
+                db.session.commit()
+            return jsonify({"long_link": long_link, "short_link": short_link, "link_status": link_status})
         except:
             return jsonify({"message": "Что-то пошло не так 2 !"})
-        finally:
-            conn.commit()
-        return message, 201
+ 
+
+
+@app.route("/show_links", methods=['GET'])
+@check_token
+def show_links():
     if request.method == 'GET':
-        token = request.args.get('token')
+        dat = []
+        token = request.cookies.get('token')
         username = jwt.decode(token, secret_key, "HS256")
         try:
-            conn = sqlite3.connect('proj.db')
-            db = conn.cursor()
-            user_id = db.execute('SELECT user_id FROM users WHERE username = ?', (username['username'],)).fetchone()[0]
-            data = db.execute("""
-                        SELECT link.user_id, link.long_link, link.short_link, readble_link.link_name, link.link_status, link.count_redirect 
-                        FROM link 
-                        LEFT JOIN readble_link 
-                        ON link.link_id = readble_link.link_id
-                        WHERE link.user_id = ?
-                        GROUP BY short_link
-                        """, (user_id,)).fetchall()
-            conn.close()
+            usr = Users.query.filter_by(username=username).first()
+            user_id = usr.id
+            lnk = Link.query.filter_by(users_id=user_id).first()
+            link_id = lnk.id
+            long_linkid = lnk.longlink_id
+            lnkid = Link.query.filter_by(id=long_linkid).first()
+            long_link = lnkid.long_link
+            short_link = lnk.short_link
+            link_status = lnk.link_status
+            count_redirect = lnk.count_redirect
+            for row in req:
+                data = {}
+                data['link_id'] = link_id
+                data['long_link'] = long_link
+                data['short_link'] = short_link
+                data['link_status'] = link_status
+                data['count_redirect'] = count_redirect
+                dat.append(data)
         except:
             return jsonify({"message": "Что-то пошло не так"})
-        return jsonify(data)
+        return jsonify(dat)
 
+@app.route("/removelink", methods=['DELETE'])
+@check_token
+def remove_link():
     if request.method == "DELETE":
-        token = request.args.get('token')
+        token = request.cookies.get('token')
         username = jwt.decode(token, secret_key, "HS256")
-        del_link = request.args.get('del_link')
+        data = request.get_json()
+        short_link = data['short_link']
         try:
-            conn = sqlite3.connect('proj.db')
-            db = conn.cursor()
-            del_link_id = db.execute('SELECT link_id FROM readble_link WHERE link_name = ?', (del_link,)).fetchone()
-            user_id = db.execute('SELECT user_id FROM users WHERE username = ?', (username['username'],)).fetchone()
-            print(del_link_id)
-            if del_link_id is None:
-                link_user_id = db.execute('SELECT user_id FROM link WHERE short_link = ?', (del_link,)).fetchone()
-                if link_user_id[0] == user_id[0]:
-                    db.execute('DELETE FROM link WHERE short_link = ? AND user_id = ?', (del_link, user_id[0]))
-                    conn.commit()
-                else:
-                    return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"})
+            usr = Users.query.filter_by(username=username).first()
+            user_id = usr.id
+            lnkusrid = Link.query.filter_by(short_link=short_link).first()
+            link_user_id = lnkusrid.users_id
+
+            if link_user_id == user_id:
+                delete = Link(short_link=short_link, users_id=user_id)
+                db.session.delete(delete)
+                db.session.commit()
             else:
-                link_user_id = db.execute('SELECT user_id FROM link WHERE link_id = ?', (del_link_id[0],)).fetchone()
-                if link_user_id == user_id:
-                    db.execute('DELETE FROM link WHERE link_id = ? AND user_id = ?', (del_link_id[0], user_id[0]))
-                    db.execute('DELETE FROM readble_link WHERE link_name = ?', (del_link,))
-                    conn.commit()
-                else:
-                    return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"})
-            conn.close()
+                return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"})
         except:
             return jsonify({"message": "Что-то пошло не так"})
-        return jsonify({f"{del_link}": "Ссылка удалена"})
+        return jsonify({f"{short_link}": "Ссылка удалена"})
 
+@app.route("/updatelink", methods=['PATCH'])
+@check_token
+def update_link():
     if request.method == 'PATCH':
-        token = request.args.get('token')
+        token = request.cookies.get('token')
         username = jwt.decode(token, secret_key, "HS256")
-        short_link = request.args.get('short_name')
-        link_name = request.args.get('link_name')
-        new_link_name = request.args.get('new_link_name')
-        print(short_link)
-        print(link_name)
-        print(new_link_name)
+        data = request.get_json()
+        link_id = data['link_id']
+        short_link = data['short_link']
+        link_status = data['link_status']
         try:
-            conn = sqlite3.connect('proj.db')
+            conn = sqlite3.connect(DATABASE)
             db = conn.cursor()
-            user_id = db.execute('SELECT user_id FROM users WHERE username = ?', (username['username'],)).fetchone()
-            if link_name is not None and short_link == '':
-                link_id = db.execute("""WITH Fun as (SELECT link.user_id, readble_link.link_id, readble_link.link_name FROM link JOIN readble_link ON link.link_id = readble_link.link_id GROUP BY link.user_id) SELECT link_id FROM Fun WHERE user_id = ? AND link_name = ?""", (user_id[0], link_name)).fetchone()
-                if link_id is not None: 
-                    if new_link_name == '':
-                        db.execute('DELETE FROM readble_link WHERE link_id = ?', (link_id[0],))
-                        conn.commit()
-                    else:
-                        db.execute('UPDATE readble_link SET link_name = ? WHERE link_id = ?', (domen_name+new_link_name, link_id[0]))
-                        conn.commit()
-                        message = [link_name, "Ссылка обновлена"]
-                else:
-                    return jsonify({"message": "Эта короткая ссылка вам не принадлежит 1"})
-            elif short_link is not None and new_link_name == '' and link_name == '':
-                link_id = db.execute('SELECT link_id FROM link WHERE user_id = ? AND short_link = ?', (user_id[0], short_link)).fetchone()
-                print(link_id)
-                if link_id is not None:
-                    new_short_link = make_short_link()
-                    db.execute('UPDATE link SET short_link = ? WHERE link_id = ?', (domen_name+new_short_link, link_id[0]))
-                    conn.commit()
-                    message = [short_link, "Ссылка обновлена"]
-                else:
-                    return jsonify({"message": "Эта короткая ссылка вам не принадлежит 2"})
-            elif short_link is not None and new_link_name is not None:
-                link_id = db.execute('SELECT link_id FROM link WHERE user_id = ? AND short_link = ?', (user_id[0], short_link)).fetchone()
-                print(link_id)
-                if link_id is not None:
-                    db.execute('INSERT INTO readble_link(link_id, link_name) VALUES(?, ?)', (link_id[0], domen_name+new_link_name))
-                    conn.commit()
-                    message = [short_link, "Добавлено читаемое имя для ссылки"]
-                else:
-                    return jsonify({"message": "Эта короткая ссылка вам не принадлежит 3"})
-            conn.close()
+
+            usr = Users.query.filter_by(username=username).first()
+            user_id = usr.id
+            lnkusrid = Link.query.filter_by(link_id=link_id).first()
+            link_user_id = lnkusrid.users_id
+            if link_user_id == user_id:
+                if short_link == "":
+                    short_link = make_short_link()
+                    db.execute('UPDATE link SET short_link = ? WHERE link_id = ? AND user_id = ?', (short_link, link_id, user_id))
+                elif 8 < len(short_link) < 12:# БЫЛО БЫ НЕПЛОХО ВАЛИДАТОР НАПИСАТЬ чтобы не было коротких ссылок типа @@@@@@@@@@@@@
+                    db.execute('UPDATE link SET short_link = ? WHERE link_id = ? AND user_id = ?', (short_link, link_id, user_id))
+                if link_status == 0 or link_status == 1 or link_status == 2:
+                    db.execute('UPDATE link SET link_status = ? WHERE link_id = ? AND user_id = ?', (link_status, link_id, user_id))
+                conn.commit()
+                return jsonify({"Ссылка "+f"{link_id}": "Успешно обновлена"}), 201
+            else:
+                return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"})
         except:
-            return jsonify({"message": "Некорректный запрос"})
-        return jsonify(message)
-        
+            return jsonify({"message": "Что-то пошло не так"})
+
 
 @app.route('/<short_link>', methods=['GET'])
 def link(short_link):
-    domen_name = 'http://127.0.0.1:5000/'
     try:
-        conn = sqlite3.connect('proj.db')
-        db = conn.cursor()
-        long_link = db.execute('SELECT long_link FROM link WHERE short_link = ?', (domen_name+short_link,)).fetchone()[0]
-    except:
-        return jsonify({"message": "Какая то ошибка"})
-    return redirect(long_link, code=302)
+        token = request.cookies.get('token')
+        if not token:
+            lnksts = Link.query.filter_by(short_link=short_link).first()
+            link_status = lnksts.link_status
+            if link_status == 0:
+                lnk = Link.query.filter_by(short_link=short_link).first()
 
+                lnglink = lnk.long_link
+
+                linkid = lnk.link_id
+                count = red_count(linkid)
+                print(count)
+                Link.query.filter_by(link_id=linkid).update({'count_redirect': count})
+                db.session.commit()
+                return redirect(lnglink, code=302)
+            else:
+                return jsonify({"message": "Данная ссылка имеет ограниченный доступ, авторизуйтесь или зарегистрируйтесь"})
+        try:
+            username = jwt.decode(token, secret_key, "HS256")
+            #  проверка на юзер айди
+            lnk = Link.query.filter_by(short_link=short_link).first()
+            link_status = lnk.link_status
+
+            if link_status == 0 or link_status == 1:
+                    link = db.execute('SELECT long_link, link_id FROM link WHERE short_link = ?', (short_link,)).fetchone()
+
+                    lnk = Link.query.filter_by(short_link=short_link).first()
+
+                    lnglink = lnk.long_link
+
+                    linkid = lnk.link_id
+                    count = red_count(linkid)
+                    Link.query.filter_by(link_id=linkid).update({'count_redirect': count})
+                    db.session.commit()
+
+                    return redirect(link[0], code=302)
+            elif link_status == 3:
+                # переделать
+                    usr = Users.query.filter_by(username=username).first()
+                    user_id = usr.id
+                    lnkusrid = Link.query.filter_by(short_link=short_link, users_id=user_id).first()
+                    link_user_id = lnkusrid.id
+                    if link_user_id == user_id:
+
+
+                        lnglnk = Longlink.query.filter_by(short_link=short_link, users_id=user_id).first()
+                        long_link = lnglnk.long_link
+
+                        link = db.execute('SELECT long_link, link_id FROM link WHERE short_link = ? AND user_id = ?', (short_link, user_id)).fetchone()
+
+                        lnk = Link.query.filter_by(short_link=short_link).first()
+                        lnglink = lnk.long_link
+                        linkid = lnk.link_id
+                        count = red_count(linkid)
+                        Link.query.filter_by(link_id=linkid).update({'count_redirect': count})
+                        db.session.commit()
+                        return redirect(link[0], code=302)
+                    else:
+                        return jsonify({"message": "Данная ссылка имеет ограниченный доступ"})
+        except:
+            return jsonify({"message": "Invalid token. Please login"})
+    except:
+        return jsonify({"message": "Что-то пошло не так 2!"})
     
-#http://www.llanfairpwllgwyngyllgogerychwyrndrobwllllantysiliogogogochuchaf.eu/
-#https://python-scripts.com/sqlite/
 
 def make_short_link():
-    arr_link = []
-    alphavit = ('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
-    count = random.randint(8, 12)
-    [arr_link.append(random.choice(alphavit)) for i in range(count)]
-    short_link = ''.join(arr_link)
-    return short_link
-       
-    
-  
+    marker = True
+    while marker == True:
+        try:
+            arr_link = []
+            alphavit = ('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')
+            count = randint(8, 12)
+            [arr_link.append(choice(alphavit)) for i in range(100)]
+            num = ''.join(arr_link)
+            short_link = md5(num.encode('utf-8')).hexdigest()[:count]
+            print(short_link)
+            lnk = Link.query.filter_by(short_link=short_link).first()
+            link = lnk.short_link
 
+            if link is None:
+                marker = False
+        except:
+            return jsonify({'message': 'Что-то пошло не так 1 !'})
+    return short_link
+
+def red_count(link_id):
+    cnt = Users.query.filter_by(link_id=link_id).first()
+    count = cnt.count_redirect
+    print(count)
+    if count is None:
+        count = 1
+        return count
+    else:
+        count = count + 1
+        return count
 
 if __name__=="__main__":
     app.run(debug=True)
