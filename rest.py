@@ -78,7 +78,6 @@ def login():
                     session["username"] = username
                     session["token"] = token
                     res = make_response(jsonify({"token": token}))
-                    res.set_cookie(key='token', value=token)
                 else:
                     return jsonify({"message": "Неверное имя пользователя или пароль"}), 403
             except:
@@ -111,7 +110,8 @@ def register():
             }
             token = jwt.encode(payload=payloads, key=secret_key, algorithm="HS256", headers=headers)
             res = make_response(jsonify({"token": token}))
-            res.set_cookie(key='token', value=token)
+            session["username"] = username
+            session["token"] = token
             try:
                 users = Users(username=username, password=hash_passwd)
                 db.session.add(users)
