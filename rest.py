@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify, session, redirect, make_response
 from flask_sqlalchemy import SQLAlchemy
 import jwt
 from functools import wraps
-import sqlite3
 import os
 from random import randint, choice
 import bcrypt
@@ -40,7 +39,7 @@ class Link(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     longlink_id = db.Column(db.Integer, db.ForeignKey('longlink.id'), nullable=False)
     users_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    short_link = db.Column(db.Text, nullable=False)
+    short_link = db.Column(db.Text, nullable=False, unique=True)
     count_redirect = db.Column(db.Integer, nullable=True)
     link_status = db.Column(db.Integer, nullable=True)
 
@@ -136,17 +135,15 @@ def make_link():
         if short_link == "":
             short_link = make_short_link()
         try:
-
-            conn = sqlite3.connect(DATABASE)
-            db = conn.cursor()
-
             username = jwt.decode(token, secret_key, 'HS256')
             usr = Users.query.filter_by(username=username).first()
             user_id = usr.id
             #####
-            double_long_link = db.execute('SELECT long_link FROM link WHERE long_link = ? AND user_id = ? AND link_status = ?', (long_link, user_id, link_status)).fetchone()
-            #####
-            if double_long_link is not None:
+            lnglnk = longlink.query.filter_by(long_link=long_link).first()
+            #  если длинной ссылки нет
+            longlink_id = lnglnk.id
+            lnk = Link.query.filter_by(longlink_id=longlink_id, users_id=user_id).first()
+            if lnk is not None:
                 return jsonify({"message": "Данная ссылка уже была сокращена вами ранее. Вы можете редактировать ее в личном кабинете"})
             else:
                 lnglnk = longlink.query.filter_by(long_link=long_link).first()
@@ -197,7 +194,6 @@ def link(short_link):
             if not token:
                 lnk = Link.query.filter_by(short_link=short_link).first()
                 link_status = lnk.link_status
-                #  Решить проблему дублирования коротких ссылок
                 if link_status == 0:
                     lnk = Link.query.filter_by(short_link=short_link).first()
                     longlink_id = lnk.longlink_id
@@ -230,14 +226,18 @@ def link(short_link):
                     return redirect(long_link, code=302)
                 elif link_status == 3:
                     lnk = Link.query.filter_by(short_link=short_link, users_id=user_id).first()
-                    link_id = lnk.id
-                    longlink_id = lnk.longlink_id
-                    lnglnk = longlink.query.filter_by(longlink_id=longlink_id).first()
-                    long_link = lnglnk.long_link
-                    count = red_count(link_id)
-                    Link.query.filter_by(id=link_id).update({'count_redirect': count})
-                    db.session.commit()
-                    return redirect(long_link, code=302)
+                    link_user_id = lnk.users_id
+                    if link_user_id == user_id:
+                        link_id = lnk.id
+                        longlink_id = lnk.longlink_id
+                        lnglnk = longlink.query.filter_by(longlink_id=longlink_id).first()
+                        long_link = lnglnk.long_link
+                        count = red_count(link_id)
+                        Link.query.filter_by(id=link_id).update({'count_redirect': count})
+                        db.session.commit()
+                        return redirect(long_link, code=302)
+                    else:
+                        return jsonify({"message": "Данная ссылка имеет ограниченный доступ"})
                 else:
                     return jsonify({"message": "Данная ссылка имеет ограниченный доступ"})
             except:
@@ -256,9 +256,14 @@ def link(short_link):
         try:
             usr = Users.query.filter_by(username=username).first()
             user_id = usr.id
-            delete = Link(short_link=short_link, users_id=user_id)
-            db.session.delete(delete)
-            db.session.commit()
+            lnk = Link.query.filter_by(short_link=short_link).first()
+            link_user_id = lnk.users_id
+            if link_user_id == user_id:
+                delete = Link(short_link=short_link, users_id=user_id)
+                db.session.delete(delete)
+                db.session.commit()
+            else:
+                return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"})
         except:
             return jsonify({"message": "Пройдите авторизацию"})
         return jsonify({f"{short_link}": "Ссылка удалена"})
@@ -274,20 +279,25 @@ def link(short_link):
         data = request.get_json()
         link_status = data['link_status']
         new_short_link = data['new_short_link']
-        try:           #  ЧТО тут происходит?
+        try:
             usr = Users.query.filter_by(username=username).first()
             user_id = usr.id
-            if new_short_link == "":
-                new_short_link = make_short_link()
-                Link.query.filter_by(short_link=short_link, users_id=user_id).update({'short_link': new_short_link})
-                db.session.commit()
-            elif 8 < len(new_short_link) < 12:# БЫЛО БЫ НЕПЛОХО ВАЛИДАТОР НАПИСАТЬ чтобы не было коротких ссылок типа @@@@@@@@@@@@@
-                Link.query.filter_by(short_link=short_link, users_id=user_id).update({'short_link': new_short_link})
-                db.session.commit()
-            if link_status == 0 or link_status == 1 or link_status == 2 and link_status != "":
-                Link.query.filter_by(short_link=short_link, users_id=user_id).update({'link_status': link_status})
-                db.session.commit()
-            return jsonify({"Ссылка "+f"{short_link}": "Успешно обновлена"}), 201
+            lnk = Link.query.filter_by(short_link=short_link).first()
+            link_user_id = lnk.users_id
+            if link_user_id == user_id:
+                if new_short_link == "":
+                    new_short_link = make_short_link()
+                    Link.query.filter_by(short_link=short_link, users_id=user_id).update({'short_link': new_short_link})
+                    db.session.commit()
+                elif 8 < len(new_short_link) < 12:# БЫЛО БЫ НЕПЛОХО ВАЛИДАТОР НАПИСАТЬ чтобы не было коротких ссылок типа @@@@@@@@@@@@@
+                    Link.query.filter_by(short_link=short_link, users_id=user_id).update({'short_link': new_short_link})
+                    db.session.commit()
+                if link_status == 0 or link_status == 1 or link_status == 2 and link_status != "":
+                    Link.query.filter_by(short_link=short_link, users_id=user_id).update({'link_status': link_status})
+                    db.session.commit()
+                return jsonify({"Ссылка "+f"{short_link}": "Успешно обновлена"}), 201
+            else:
+                return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"})
         except:
             return jsonify({"message": "Пройдите авторизацию"})
 
@@ -303,12 +313,8 @@ def make_short_link():
             num = ''.join(arr_link)
             short_link = md5(num.encode('utf-8')).hexdigest()[:count]
             print(short_link)
-            ##############
-            #  Надо добавить Userid, у нас могут быть 2 одинаковые короткие ссылки у разных пользователей
             lnk = Link.query.filter_by(short_link=short_link).first()
             missing = Link.query.filter_by(short_link=lnk.short_link).first()
-            ###############
-            #  link = db.execute('SELECT short_link FROM link WHERE short_link = ?', (short_link,)).fetchone() Что тут происходит?
             if missing is None:
                 marker = False
         except:

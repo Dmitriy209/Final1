@@ -184,7 +184,7 @@ def show_links():
             lnk = Link.query.filter_by(users_id=user_id).first()
             link_id = lnk.id
             long_linkid = lnk.longlink_id
-            lnkid = Link.query.filter_by(id=long_linkid).first()
+            lnkid = longlink.query.filter_by(id=long_linkid).first()
             long_link = lnkid.long_link
             short_link = lnk.short_link
             link_status = lnk.link_status
@@ -358,5 +358,9 @@ def red_count(link_id):
         count = count + 1
         return count
 
+
+
+lnk = Link.query.filter_by(users_id='1').all()
+print(lnk[0].id)
 if __name__=="__main__":
     app.run(debug=True)
