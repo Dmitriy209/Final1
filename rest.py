@@ -134,36 +134,36 @@ def make_link():
         link_status = data['link_status']
         if short_link == "":
             short_link = make_short_link()
-    #    try:
-        username = jwt.decode(token, secret_key, 'HS256')
-        print(username)
-        usr = Users.query.filter_by(username=username['username']).first()
-        print(username)
-        user_id = usr.id
-        lnglnk = longlink.query.filter_by(long_link=long_link).first()
-        if lnglnk is None:
-            lnglnk = longlink(long_link=long_link)
-            db.session.add(lnglnk)
-            db.session.commit()
-        longlink_id = lnglnk.id
-        lnk = Link.query.filter_by(longlink_id=longlink_id, users_id=user_id).first()
-        if lnk is not None:
-            return jsonify({"message": "Данная ссылка уже была сокращена вами ранее. Вы можете редактировать ее в личном кабинете"})
-        else:
+        try:
+            username = jwt.decode(token, secret_key, 'HS256')
+            print(username)
+            usr = Users.query.filter_by(username=username['username']).first()
+            print(username)
+            user_id = usr.id
             lnglnk = longlink.query.filter_by(long_link=long_link).first()
-            longlnk = lnglnk.long_link
-            if long_link != longlnk:
+            if lnglnk is None:
                 lnglnk = longlink(long_link=long_link)
                 db.session.add(lnglnk)
                 db.session.commit()
-            lnglnk = longlink.query.filter_by(long_link=long_link).first()
-            lnglnkid = lnglnk.id
-            link = Link(short_link=short_link, users_id=user_id, link_status=link_status, longlink_id=lnglnkid)
-            db.session.add(link)
-            db.session.commit()
+            longlink_id = lnglnk.id
+            lnk = Link.query.filter_by(longlink_id=longlink_id, users_id=user_id).first()
+            if lnk is not None:
+                return jsonify({"message": "Данная ссылка уже была сокращена вами ранее. Вы можете редактировать ее в личном кабинете"})
+            else:
+                lnglnk = longlink.query.filter_by(long_link=long_link).first()
+                longlnk = lnglnk.long_link
+                if long_link != longlnk:
+                    lnglnk = longlink(long_link=long_link)
+                    db.session.add(lnglnk)
+                    db.session.commit()
+                lnglnk = longlink.query.filter_by(long_link=long_link).first()
+                lnglnkid = lnglnk.id
+                link = Link(short_link=short_link, users_id=user_id, link_status=link_status, longlink_id=lnglnkid)
+                db.session.add(link)
+                db.session.commit()
             return jsonify({"long_link": long_link, "short_link": short_link, "link_status": link_status})
-    #    except:
-    #        return jsonify({"message": "Что-то пошло не так 2 !"})
+        except:
+            return jsonify({"message": "Что-то пошло не так 2 !"})
  
 @app.route("/show_links", methods=['GET'])
 @check_token
@@ -261,7 +261,7 @@ def link(short_link):
             lnk = Link.query.filter_by(short_link=short_link).first()
             link_user_id = lnk.users_id
             if link_user_id == user_id:
-                delete = Link(short_link=short_link, users_id=user_id)
+                delete = Link.query.filter_by(short_link=short_link, users_id=user_id).first()
                 db.session.delete(delete)
                 db.session.commit()
             else:
