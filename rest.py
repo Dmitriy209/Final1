@@ -134,32 +134,36 @@ def make_link():
         link_status = data['link_status']
         if short_link == "":
             short_link = make_short_link()
-        try:
-            username = jwt.decode(token, secret_key, 'HS256')
-            usr = Users.query.filter_by(username=username).first()
-            user_id = usr.id
-            #####
+    #    try:
+        username = jwt.decode(token, secret_key, 'HS256')
+        print(username)
+        usr = Users.query.filter_by(username=username['username']).first()
+        print(username)
+        user_id = usr.id
+        lnglnk = longlink.query.filter_by(long_link=long_link).first()
+        if lnglnk is None:
+            lnglnk = longlink(long_link=long_link)
+            db.session.add(lnglnk)
+            db.session.commit()
+        longlink_id = lnglnk.id
+        lnk = Link.query.filter_by(longlink_id=longlink_id, users_id=user_id).first()
+        if lnk is not None:
+            return jsonify({"message": "Данная ссылка уже была сокращена вами ранее. Вы можете редактировать ее в личном кабинете"})
+        else:
             lnglnk = longlink.query.filter_by(long_link=long_link).first()
-            #  если длинной ссылки нет
-            longlink_id = lnglnk.id
-            lnk = Link.query.filter_by(longlink_id=longlink_id, users_id=user_id).first()
-            if lnk is not None:
-                return jsonify({"message": "Данная ссылка уже была сокращена вами ранее. Вы можете редактировать ее в личном кабинете"})
-            else:
-                lnglnk = longlink.query.filter_by(long_link=long_link).first()
-                longlnk = lnglnk.long_link
-                if long_link != longlnk:
-                    lnglnk = longlink(long_link=long_link)
-                    db.session.add(lnglnk)
-                    db.session.commit()
-                lnglnk = longlink.query.filter_by(long_link=long_link).first()
-                lnglnkid = lnglnk.id
-                link = Link(short_link=short_link, users_id=user_id, link_status=link_status, longlink_id=lnglnkid)
-                db.session.add(link)
+            longlnk = lnglnk.long_link
+            if long_link != longlnk:
+                lnglnk = longlink(long_link=long_link)
+                db.session.add(lnglnk)
                 db.session.commit()
-                return jsonify({"long_link": long_link, "short_link": short_link, "link_status": link_status})
-        except:
-            return jsonify({"message": "Что-то пошло не так 2 !"})
+            lnglnk = longlink.query.filter_by(long_link=long_link).first()
+            lnglnkid = lnglnk.id
+            link = Link(short_link=short_link, users_id=user_id, link_status=link_status, longlink_id=lnglnkid)
+            db.session.add(link)
+            db.session.commit()
+            return jsonify({"long_link": long_link, "short_link": short_link, "link_status": link_status})
+    #    except:
+    #        return jsonify({"message": "Что-то пошло не так 2 !"})
  
 @app.route("/show_links", methods=['GET'])
 @check_token
@@ -168,19 +172,19 @@ def show_links():
         dat = []
         token = session.get('token')
         username = jwt.decode(token, secret_key, "HS256")
-        usr = Users.query.filter_by(username=username).first()
+        usr = Users.query.filter_by(username=username['username']).first()
         user_id = usr.id
         try:
             lnk = Link.query.filter_by(users_id=user_id).all()
             for row in lnk:
                 data = {}
-                data['link_id'] = lnk[row].id
-                long_linkid = lnk[row].longlink_id
+                data['link_id'] = row.id
+                long_linkid = row.longlink_id
                 lnkid = longlink.query.filter_by(id=long_linkid).first()
-                data['long_link'] = lnkid[row].long_link
-                data['short_link'] = lnk[row].short_link
-                data['link_status'] = lnk[row].link_status
-                data['count_redirect'] = lnk[row].count_redirect
+                data['long_link'] = lnkid.long_link
+                data['short_link'] = row.short_link
+                data['link_status'] = row.link_status
+                data['count_redirect'] = row.count_redirect
                 dat.append(data)
         except:
             return jsonify({"message": "Что-то пошло не так"})
@@ -209,17 +213,15 @@ def link(short_link):
                     return jsonify({"message": "Данная ссылка имеет ограниченный доступ, авторизуйтесь или зарегистрируйтесь"})
             try:
                 username = jwt.decode(token, secret_key, "HS256")
-                usr = Users.query.filter_by(username=username).first()
+                usr = Users.query.filter_by(username=username['username']).first()
                 user_id = usr.id
                 lnk = Link.query.filter_by(short_link=short_link).first()
                 link_status = lnk.link_status
                 if link_status == 0 or link_status == 1:
-                    #  Дублирование короткой ссылки
                     link_id = lnk.id
                     longlink_id = lnk.longlink_id
                     lnglnk = longlink.query.filter_by(longlink_id=longlink_id).first()
                     long_link = lnglnk.long_link
-                #    link = db.execute('SELECT long_link, link_id FROM link WHERE short_link = ?', (short_link,)).fetchone()
                     count = red_count(link_id)
                     Link.query.filter_by(id=link_id).update({'count_redirect': count})
                     db.session.commit()
@@ -254,7 +256,7 @@ def link(short_link):
             return jsonify({"message": "Invalid token"}), 403
         username = jwt.decode(token, secret_key, "HS256")
         try:
-            usr = Users.query.filter_by(username=username).first()
+            usr = Users.query.filter_by(username=username['username']).first()
             user_id = usr.id
             lnk = Link.query.filter_by(short_link=short_link).first()
             link_user_id = lnk.users_id
@@ -280,7 +282,7 @@ def link(short_link):
         link_status = data['link_status']
         new_short_link = data['new_short_link']
         try:
-            usr = Users.query.filter_by(username=username).first()
+            usr = Users.query.filter_by(username=username['username']).first()
             user_id = usr.id
             lnk = Link.query.filter_by(short_link=short_link).first()
             link_user_id = lnk.users_id
@@ -331,6 +333,5 @@ def red_count(link_id):
     else:
         count = count + 1
         return count
-
 if __name__=="__main__":
     app.run(debug=True)
