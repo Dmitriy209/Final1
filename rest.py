@@ -10,22 +10,18 @@ from datetime import timedelta
 
 app = Flask(__name__)
 secret_key = app.secret_key = os.urandom(16)
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(seconds=200)
-DATABASE = 'proj.db'
-
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=3)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///lib.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
-
 class Users(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.Text, nullable=False, unique=True)
-    password = db.Column(db.BLOB, nullable=False)  # LargeBinary
+    password = db.Column(db.BLOB, nullable=False)
 
     def __repr__(self):
         return f'<Users {self.id}>'
-
 
 class longlink(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -33,7 +29,6 @@ class longlink(db.Model):
 
     def __repr__(self):
         return f'<longlink {self.id}>'
-
 
 class Link(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -45,7 +40,6 @@ class Link(db.Model):
 
     def __repr__(self):
         return f'<Link {self.id}>'
-
 
 def check_token(func):
     @wraps(func)
@@ -91,7 +85,7 @@ def logout():
     name = session['username']
     session.pop("username", None)
     session.pop("token", None)
-    return jsonify({"message": f"{name} - закрыта"})
+    return jsonify({"message": f"{name} - закрыта"}), 200
 
 @app.route("/register", methods=['POST'])
 def register():
@@ -120,7 +114,7 @@ def register():
                 return "Пользователь с таким именем уже зарегистрирован. Попробуйте использовать другое имя.",  403
         else:
             return jsonify({"message": "Введите имя пользователя и пароль"}), 403
-        return res
+        return res, 200
 
 
 @app.route("/make_link", methods=['POST'])
@@ -132,13 +126,19 @@ def make_link():
         short_link = data['short_link']
         token = session.get('token')
         link_status = data['link_status']
+        print(link_status)
+        print(type(link_status))
         if short_link == "":
             short_link = make_short_link()
+        else:
+            if 8 > len(short_link) or 12 < len(short_link):
+                return jsonify({"message": "Длина ссылки должна быть от 8 - 12 символов"})
+        print(short_link)
+        if '012'.count(str(link_status)) == 0:
+            return jsonify({"message": "Введите следующий статус ссылки: 0 - Публичная (доступна всем), 1 - Общего доступа (доступна лишь авторизованным пользователям, 2 - Приватная (доступна лишь создателю)"})
         try:
             username = jwt.decode(token, secret_key, 'HS256')
-            print(username)
             usr = Users.query.filter_by(username=username['username']).first()
-            print(username)
             user_id = usr.id
             lnglnk = longlink.query.filter_by(long_link=long_link).first()
             if lnglnk is None:
@@ -161,9 +161,9 @@ def make_link():
                 link = Link(short_link=short_link, users_id=user_id, link_status=link_status, longlink_id=lnglnkid)
                 db.session.add(link)
                 db.session.commit()
-            return jsonify({"long_link": long_link, "short_link": short_link, "link_status": link_status})
+                return jsonify({"long_link": long_link, "short_link": short_link, "link_status": link_status})
         except:
-            return jsonify({"message": "Что-то пошло не так 2 !"})
+            return jsonify({"message": "Увы, но что-то пошло не так"}), 500
  
 @app.route("/show_links", methods=['GET'])
 @check_token
@@ -176,18 +176,21 @@ def show_links():
         user_id = usr.id
         try:
             lnk = Link.query.filter_by(users_id=user_id).all()
-            for row in lnk:
-                data = {}
-                data['link_id'] = row.id
-                long_linkid = row.longlink_id
-                lnkid = longlink.query.filter_by(id=long_linkid).first()
-                data['long_link'] = lnkid.long_link
-                data['short_link'] = row.short_link
-                data['link_status'] = row.link_status
-                data['count_redirect'] = row.count_redirect
+            if len(lnk) != 0:
+                for row in lnk:
+                    data = {}
+                    data['link_id'] = row.id
+                    long_linkid = row.longlink_id
+                    lnkid = longlink.query.filter_by(id=long_linkid).first()
+                    data['long_link'] = lnkid.long_link
+                    data['short_link'] = row.short_link
+                    data['link_status'] = row.link_status
+                    data['count_redirect'] = row.count_redirect
                 dat.append(data)
+            else:
+                return jsonify({"message": "Здесь пока нет ваших ссылок, создайте ее..."})
         except:
-            return jsonify({"message": "Что-то пошло не так"})
+            return jsonify({"message": "Увы, но что-то пошло не так"}), 500
         return jsonify(dat)
 
 @app.route('/<short_link>', methods=['GET', 'DELETE', 'PATCH'])
@@ -201,16 +204,16 @@ def link(short_link):
                 if link_status == 0:
                     lnk = Link.query.filter_by(short_link=short_link).first()
                     longlink_id = lnk.longlink_id
-                    lnglnk = longlink.query.filter_by(longlink_id=longlink_id).first()
+                    lnglnk = longlink.query.filter_by(id=longlink_id).first()
                     long_link = lnglnk.long_link
-                    link_id = lnk.id
-                    count = red_count(link_id)
-                    print(count)
-                    Link.query.filter_by(id=link_id).update({'count_redirect': count})
+                    count = red_count(lnk.id)
+                    Link.query.filter_by(id=lnk.id).update({'count_redirect': count})
                     db.session.commit()
                     return redirect(long_link, code=302)
-                else:
-                    return jsonify({"message": "Данная ссылка имеет ограниченный доступ, авторизуйтесь или зарегистрируйтесь"})
+                elif link_status == 1:
+                    return jsonify({"message": "Данная ссылка имеет ограниченный доступ, авторизуйтесь или зарегистрируйтесь"}), 401
+                elif link_status == 2:
+                    return jsonify({"message": "Данная ссылка приватна!"}), 403
             try:
                 username = jwt.decode(token, secret_key, "HS256")
                 usr = Users.query.filter_by(username=username['username']).first()
@@ -220,32 +223,31 @@ def link(short_link):
                 if link_status == 0 or link_status == 1:
                     link_id = lnk.id
                     longlink_id = lnk.longlink_id
-                    lnglnk = longlink.query.filter_by(longlink_id=longlink_id).first()
+                    lnglnk = longlink.query.filter_by(id=longlink_id).first()
                     long_link = lnglnk.long_link
                     count = red_count(link_id)
                     Link.query.filter_by(id=link_id).update({'count_redirect': count})
                     db.session.commit()
                     return redirect(long_link, code=302)
-                elif link_status == 3:
+                elif link_status == 2:
                     lnk = Link.query.filter_by(short_link=short_link, users_id=user_id).first()
-                    link_user_id = lnk.users_id
-                    if link_user_id == user_id:
+                    if lnk is not None:
+                        link_user_id = lnk.users_id
                         link_id = lnk.id
                         longlink_id = lnk.longlink_id
-                        lnglnk = longlink.query.filter_by(longlink_id=longlink_id).first()
+                        lnglnk = longlink.query.filter_by(id=longlink_id).first()
                         long_link = lnglnk.long_link
                         count = red_count(link_id)
                         Link.query.filter_by(id=link_id).update({'count_redirect': count})
                         db.session.commit()
                         return redirect(long_link, code=302)
                     else:
-                        return jsonify({"message": "Данная ссылка имеет ограниченный доступ"})
-                else:
-                    return jsonify({"message": "Данная ссылка имеет ограниченный доступ"})
+                        return jsonify({"message": "Данная ссылка приватна"}), 403
             except:
-                return jsonify({"message": "Invalid token. Please login"})
+                return jsonify({"message": "Неверный токен, авторизуйтесь"}), 401
         except:
-            return jsonify({"message": "Что-то пошло не так 2!"})
+            return jsonify({"message": "Увы, но что-то пошло не так"}), 500
+
     if request.method == "DELETE":
         token = session.get('token')
         if token is None:
@@ -265,10 +267,11 @@ def link(short_link):
                 db.session.delete(delete)
                 db.session.commit()
             else:
-                return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"})
+                return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"}), 403
         except:
-            return jsonify({"message": "Пройдите авторизацию"})
-        return jsonify({f"{short_link}": "Ссылка удалена"})
+            return jsonify({"message": "Авторизуйтесь"}), 401
+        return jsonify({f"{short_link}": "Ссылка удалена"}), 200
+
     if request.method == "PATCH":
         token = session.get('token')
         if token is None:
@@ -291,17 +294,20 @@ def link(short_link):
                     new_short_link = make_short_link()
                     Link.query.filter_by(short_link=short_link, users_id=user_id).update({'short_link': new_short_link})
                     db.session.commit()
-                elif 8 < len(new_short_link) < 12:# БЫЛО БЫ НЕПЛОХО ВАЛИДАТОР НАПИСАТЬ чтобы не было коротких ссылок типа @@@@@@@@@@@@@
-                    Link.query.filter_by(short_link=short_link, users_id=user_id).update({'short_link': new_short_link})
-                    db.session.commit()
-                if link_status == 0 or link_status == 1 or link_status == 2 and link_status != "":
+                else:
+                    if 8 < len(new_short_link) and len(new_short_link) < 12:
+                        Link.query.filter_by(short_link=short_link, users_id=user_id).update({'short_link': new_short_link})
+                        db.session.commit()
+                if '012'.count(str(link_status)) != 0:
                     Link.query.filter_by(short_link=short_link, users_id=user_id).update({'link_status': link_status})
                     db.session.commit()
+                else:
+                    return jsonify({"message": "Введите следующий статус ссылки: 0 - Публичная (доступна всем), 1 - Общего доступа (доступна лишь авторизованным пользователям, 2 - Приватная (доступна лишь создателю)"})
                 return jsonify({"Ссылка "+f"{short_link}": "Успешно обновлена"}), 201
             else:
-                return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"})
+                return jsonify({"message": "Вы не являетесь владельцем этой короткой ссылки"}), 403
         except:
-            return jsonify({"message": "Пройдите авторизацию"})
+            return jsonify({"message": "Авторизуйтесь"}), 401
 
 
 def make_short_link():
@@ -316,11 +322,11 @@ def make_short_link():
             short_link = md5(num.encode('utf-8')).hexdigest()[:count]
             print(short_link)
             lnk = Link.query.filter_by(short_link=short_link).first()
-            missing = Link.query.filter_by(short_link=lnk.short_link).first()
-            if missing is None:
+            print(lnk)
+            if lnk is None:
                 marker = False
         except:
-            return jsonify({'message': 'Что-то пошло не так 1 !'})
+            return jsonify({'message': 'Увы, но что-то пошло не так!'}), 500
     return short_link
 
 def red_count(link_id):
